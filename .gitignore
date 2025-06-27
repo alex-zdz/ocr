@@ -1,0 +1,9 @@
+# Ignore all raw data files and directories
+/data/**
+
+# Include the tokens folder and its contents
+!/data/tokens/
+!/data/tokens/**
+
+# Re-include .gitkeep files so empty folders are tracked
+!**/.gitkeep 
