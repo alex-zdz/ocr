@@ -157,6 +157,7 @@ def run_inference_and_calculate_cer(model_path, message_template, dataset):
         cer = compute_CER(item["text"], prediction, normalize=True)
         results.append({
             "ground_truth": item["text"],
+            "num_lines": item["num_lines"],
             "prediction": prediction,
             "identifier": item["identifier"],
             "CER": cer

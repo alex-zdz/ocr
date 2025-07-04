@@ -44,7 +44,8 @@ def parse_xml_index_ordering(file_path):
     regions = {
         "region_id": [],
         "coord_str": [],
-        "ordered_text": []
+        "ordered_text": [],
+        "num_lines": []
     }
 
     for text_region in root.findall(".//ns:TextRegion", namespace):
@@ -76,6 +77,7 @@ def parse_xml_index_ordering(file_path):
         regions["region_id"].append(region_id)
         regions["coord_str"].append(coords_str)
         regions["ordered_text"].append(ordered_text)
+        regions["num_lines"].append(len(text_lines))
 
     return regions
 
@@ -100,7 +102,8 @@ def extract_and_create(input_folder, output_folder):
             regions = parse_xml_index_ordering(xml_path)
             pd.DataFrame({
                 "text": regions["ordered_text"],
-                "identifier": [f"{base_name}_{region_id}" for region_id in regions["region_id"]]
+                "identifier": [f"{base_name}_{region_id}" for region_id in regions["region_id"]],
+                "num_lines": regions["num_lines"]
             }).to_csv(f"{output_folder}/texts/{base_name}.csv", index=False)
 
             cropped_images = create_images_from_regions(image_path, regions,
