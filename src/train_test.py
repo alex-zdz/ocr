@@ -1,9 +1,13 @@
-import string
 import re
 import unicodedata
+import pandas as pd
+from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
+from qwen_vl_utils import process_vision_info
+import pandas as pd
+import matplotlib.pyplot as plt
+from copy import deepcopy
 
-
-def process_image(image, model, messages_template):
+def process_image(image, model, messages_template, processor):
     messages = deepcopy(messages_template)
     messages[0]["content"][0]["image"] = image
     text = processor.apply_chat_template(
@@ -145,15 +149,28 @@ def compute_CER(gt_text, pred_text, normalize=True):
         return cer
 
 
-def run_inference_and_calculate_cer(model_path, message_template, dataset):
+def run_inference_and_calculate_cer(model_path, message, dataset):
     # Load the model and processor
     model = Qwen2VLForConditionalGeneration.from_pretrained(model_path, device_map="auto").half()
     processor = AutoProcessor.from_pretrained(model_path)
 
+    message_template = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "image": None,  # Placeholder for image, to be updated
+                },
+                {"type": "text", "text": f"{message}"},
+            ],
+        }
+    ]
+
     results = []
     # Run inference on the dataset
     for item in dataset:
-        prediction = process_image(item["image"], model, message_template)
+        prediction = process_image(item["image"], model, message_template, processor)
         cer = compute_CER(item["text"], prediction, normalize=True)
         results.append({
             "ground_truth": item["text"],

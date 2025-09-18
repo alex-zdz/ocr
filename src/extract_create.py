@@ -118,17 +118,29 @@ def extract_and_create(input_folder, output_folder):
 def process_dataframe(df, image_dir):
     dataset = Dataset.from_pandas(df)
     
-    # Function to map the image loading for each row
-    def process_images(example):
-        image_filename = example['identifier'] + '.png' 
-        image_path = os.path.join(image_dir, image_filename)  # 'identifier' is the image file name
-        example['image'] = Image.open(image_path)
-        return example
+    # # Function to map the image loading for each row
+    # def process_images(example):
+    #     if("singlecol" in image_dir):
+    #         image_filename = example['id'] + '.jpg' 
+    #     else:
+    #         image_filename = example['identifier'] + '.png' 
+    #     image_path = os.path.join(image_dir, image_filename)  # 'identifier' is the image file name
+    #     example['image'] = Image.open(image_path)
+    #     return example
 
     # Apply the image loading function
     dataset = dataset.map(process_images)
     return dataset
 
+# Function to map the image loading for each row
+def process_images(example):
+    if("singlecol" in image_dir):
+        image_filename = example['id'] + '.jpg' 
+    else:
+        image_filename = example['identifier'] + '.png' 
+    image_path = os.path.join(image_dir, image_filename)  # 'identifier' is the image file name
+    example['image'] = Image.open(image_path)
+    return example
 
 
 

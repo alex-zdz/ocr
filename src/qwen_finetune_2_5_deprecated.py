@@ -1,8 +1,6 @@
 """
-The original version of this fine-tuning script came from this source: https://github.com/zhangfaen/finetune-Qwen2-VL.
-I modified this to align it to work specifically with HuggingFace datasets.
-I also designed it to specifically with with the Gradio app in the main directory, app.py.
- I also added a validation step to the training loop. I am deeply indebted and grateful for their work. Without this code, this project would have been substantially more difficult.
+Fine-tuning script for Qwen2.5-VL, adapted from s_finetune.py.
+This version keeps the while loop logic from the original qwen_finetune.py
 """
 import os
 
@@ -10,7 +8,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from torch.optim import AdamW
 
-from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
+from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor  # Changed model class
 
 from datasets import load_dataset
 
@@ -58,6 +56,7 @@ def find_assistant_content_sublist_indexes(l):
 
     return list(zip(start_indexes, end_indexes))
 
+
 class HuggingFaceDataset(Dataset):
     """
     A custom Dataset class for handling HuggingFace datasets with image and text pairs.
@@ -74,6 +73,7 @@ class HuggingFaceDataset(Dataset):
         user_text (str): The default user query text to pair with each image.
 
     """
+
     def __init__(self, dataset, image_column, text_column, user_text="Convert this image to text"):
         self.dataset = dataset
         self.image_column = image_column
@@ -106,6 +106,7 @@ class HuggingFaceDataset(Dataset):
             ]
         }
 
+
 def ensure_pil_image(image, min_size=256):
     """
     Ensures that the input image is a PIL Image object and meets a minimum size requirement.
@@ -121,7 +122,7 @@ def ensure_pil_image(image, min_size=256):
     Args:
         image (Union[PIL.Image.Image, str]): The input image, either as a PIL Image object
                                              or a base64-encoded string.
-        min_size (int, optional): The minimum size (in pixels) for both width and height. 
+        min_size (int, optional): The minimum size (in pixels) for both width and height.
                                   Defaults to 256.
 
     Returns:
@@ -140,18 +141,19 @@ def ensure_pil_image(image, min_size=256):
         pil_image = Image.open(BytesIO(image_data))
     else:
         raise ValueError(f"Unsupported image type: {type(image)}")
-    
+
     # Check if the image is smaller than the minimum size
     if pil_image.width < min_size or pil_image.height < min_size:
         # Calculate the scaling factor
         scale = max(min_size / pil_image.width, min_size / pil_image.height)
         new_width = int(pil_image.width * scale)
         new_height = int(pil_image.height * scale)
-        
+
         # Resize the image
         pil_image = pil_image.resize((new_width, new_height), Image.LANCZOS)
-    
+
     return pil_image
+
 
 def collate_fn(batch, processor, device):
     """
@@ -177,10 +179,10 @@ def collate_fn(batch, processor, device):
     """
     messages = [item['messages'] for item in batch]
     texts = [processor.apply_chat_template(msg, tokenize=False, add_generation_prompt=False) for msg in messages]
-    
+
     # Ensure all images are PIL Image objects
     images = [ensure_pil_image(msg[0]['content'][0]['image']) for msg in messages]
-    
+
     # Process the text and images using the processor
     inputs = processor(
         text=texts,
@@ -201,7 +203,8 @@ def collate_fn(batch, processor, device):
         # Find the indexes of assistant content in the input IDs
         for begin_end_indexs in find_assistant_content_sublist_indexes(ids_list):
             # Set the label IDs for assistant content, skipping the first two tokens
-            label_ids[begin_end_indexs[0]+2:begin_end_indexs[1]+1] = ids_list[begin_end_indexs[0]+2:begin_end_indexs[1]+1]
+            label_ids[begin_end_indexs[0] + 2:begin_end_indexs[1] + 1] = ids_list[
+                                                                       begin_end_indexs[0] + 2:begin_end_indexs[1] + 1]
         labels_list.append(label_ids)
 
     # Convert the labels list to a tensor
@@ -210,13 +213,15 @@ def collate_fn(batch, processor, device):
     # Return the processed inputs and label IDs
     return inputs, labels_ids
 
-def validate(model, val_loader):
+
+def validate(model, val_loader, device):
     """
     Validate the model on the validation dataset.
 
     Args:
         model (nn.Module): The model to validate.
         val_loader (DataLoader): DataLoader for the validation dataset.
+        device (torch.device): The device (CPU or GPU) to which the tensors should be moved.
 
     Returns:
         float: The average validation loss.
@@ -230,40 +235,44 @@ def validate(model, val_loader):
     with torch.no_grad():
         for batch in tqdm(val_loader, desc="Validating"):
             inputs, labels = batch
+            # Move the inputs and labels to the device
+            inputs = {k: v.to(device) for k, v in inputs.items()}
+            labels = labels.to(device)
+
             outputs = model(**inputs, labels=labels)
             loss = outputs.loss
             total_val_loss += loss.item()
-    
+
     avg_val_loss = total_val_loss / len(val_loader)
     model.train()
     return avg_val_loss
 
+
 def train_and_validate(
-    model_name,
-    output_dir,
-    dataset_name,
-    image_column,
-    text_column,
-    device="cuda",
-    user_text="Convert this image to text",
-    min_pixel=256,
-    max_pixel=384,
-    image_factor=28,
-    num_accumulation_steps=2,
-    eval_steps=10,
-    max_steps=100,
-    train_select_start=0,
-    train_select_end= 1000,
-    val_select_start=0,
-    val_select_end= 1000,
-    train_batch_size=4,
-    val_batch_size=1,
-    train_field="train",
-    val_field="validation",
-    lr=1e-5
+        model_name,
+        output_dir,
+        dataset_name,
+        image_column,
+        text_column,
+        device="cuda",
+        user_text="Convert this image to text",
+        min_pixel=128,  # Changed min_pixel
+        max_pixel=256,  # Changed max_pixel
+        image_factor=28,
+        num_accumulation_steps=2,
+        eval_steps=10000,
+        max_steps=100000,
+        train_select_start=0,
+        train_select_end=55,  # 1000
+        val_select_start=0,
+        val_select_end=14,  # 1000
+        train_batch_size=4,
+        val_batch_size=1,
+        train_field="train",
+        val_field="validation"
 ):
     """
-    Train and validate a Qwen2VL model on a specified dataset.
+    Train and validate a Qwen2.5-VL model on a specified dataset.
 
     Args:
         model_name (str): Name of the pre-trained model to use.
@@ -277,13 +286,8 @@ def train_and_validate(
         max_pixel (int): Maximum pixel size for image processing.
         image_factor (int): Factor for image size calculation.
         num_accumulation_steps (int): Number of steps for gradient accumulation.
-
-        New: dont evaluate and save the model at regular intervals, just save the final model
         eval_steps (int): Number of steps between evaluations.
         max_steps (int): Maximum number of training steps.
-
-        New: Only define the end point of the train set as argument, always use 0 as start 
-        and whole validation set
         train_select_start (int): Starting index for selecting training data.
         train_select_end (int): Ending index for selecting training data.
         val_select_start (int): Starting index for selecting validation data.
@@ -292,24 +296,21 @@ def train_and_validate(
         val_batch_size (int): Batch size for validation.
         train_field (str): Field name for training data in the dataset.
         val_field (str): Field name for validation data in the dataset.
-        new: lr (float): Learning rate for the optimizer.
     Returns:
         None
     """
-    model = Qwen2VLForConditionalGeneration.from_pretrained(
+    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(  # Changed model class
         model_name, torch_dtype=torch.bfloat16,
         device_map=device
     )
 
-    processor = AutoProcessor.from_pretrained(model_name, min_pixels=min_pixel*image_factor*image_factor, max_pixels=max_pixel*image_factor*image_factor, padding_side="right")
+    processor = AutoProcessor.from_pretrained(model_name,
+                                            min_pixels=min_pixel * image_factor * image_factor,
+                                            max_pixels=max_pixel * image_factor * image_factor,
+                                            padding_side="right")  # Changed processor init
 
     # Load and split the dataset
     dataset = load_dataset(dataset_name)
-    # define end of train and validation sets as maximum available
-    train_select_start = 0
-    train_select_end = train_select_end #len(dataset[train_field])
-    val_select_start = 0
-    val_select_end = len(dataset[val_field])
     train_dataset = dataset[train_field].shuffle(seed=42).select(range(train_select_start, train_select_end))
     val_dataset = dataset[val_field].shuffle(seed=42).select(range(val_select_start, val_select_end))
 
@@ -330,50 +331,66 @@ def train_and_validate(
     )
 
     model.train()
-    optimizer = AdamW(model.parameters(), lr=lr) #1e-5
+    optimizer = AdamW(model.parameters(), lr=1e-5)
 
     global_step = 0
 
-    progress_bar = tqdm(total=max_steps, desc="Training")
+    progress_bar = tqdm(total=max_steps,
+                        desc="Training")  # Changed progress bar total
 
     while global_step < max_steps:
         for batch in train_loader:
             global_step += 1
             inputs, labels = batch
+            # Move the inputs and labels to the device
+            inputs = {k: v.to(device) for k, v in inputs.items()}
+            labels = labels.to(device)
+
             outputs = model(**inputs, labels=labels)
-            
+
             loss = outputs.loss / num_accumulation_steps
             loss.backward()
-            
+
             if global_step % num_accumulation_steps == 0:
                 optimizer.step()
                 optimizer.zero_grad()
 
             progress_bar.update(1)
-            progress_bar.set_postfix({"loss": loss.item() * num_accumulation_steps})
+            progress_bar.set_postfix(
+                {"loss": loss.item() * num_accumulation_steps})  # Changed logging format
 
             # Perform evaluation and save model every EVAL_STEPS
-            
             if global_step % eval_steps == 0 or global_step == max_steps:
-                avg_val_loss = validate(model, val_loader)
+                avg_val_loss = validate(model, val_loader, device)
 
                 # Save the model and processor
                 save_dir = os.path.join(output_dir, f"model_step_{global_step}")
                 os.makedirs(save_dir, exist_ok=True)
-                model.save_pretrained(save_dir)
+                model.save_pretrained(
+                    save_dir,
+                    max_shard_size="20GB"
+                )  # Added max_shard_size
                 processor.save_pretrained(save_dir)
 
                 model.train()  # Set the model back to training mode
 
             if global_step >= max_steps:
                 save_dir = os.path.join(output_dir, f"final")
-                model.save_pretrained(save_dir)
+                os.makedirs(save_dir, exist_ok=True)
+                model.save_pretrained(
+                    save_dir,
+                    max_shard_size="20GB"
+                )  # Added max_shard_size
                 processor.save_pretrained(save_dir)
                 break
 
         if global_step >= max_steps:
             save_dir = os.path.join(output_dir, f"final")
-            model.save_pretrained(save_dir)
+            os.makedirs(save_dir, exist_ok=True)
+            model.save_pretrained(
+                save_dir,
+                max_shard_size="20GB"
+            )  # Added max_shard_size
             processor.save_pretrained(save_dir)
             break
 

@@ -1,8 +1,7 @@
 """
-The original version of this fine-tuning script came from this source: https://github.com/zhangfaen/finetune-Qwen2-VL.
-I modified this to align it to work specifically with HuggingFace datasets.
-I also designed it to specifically with with the Gradio app in the main directory, app.py.
- I also added a validation step to the training loop. I am deeply indebted and grateful for their work. Without this code, this project would have been substantially more difficult.
+The original version of this fine-tuning script came from this source: https://github.com/zhangfaen/finetune-Qwen2-VL. I modified this to align it to work specifically with HuggingFace datasets. I also designed it to specifically with with the Gradio app in the main directory, app.py. I also added a validation step to the training loop. I am deeply indebted and grateful for their work. Without this code, this project would have been substantially more difficult.
+
+Updated for Qwen 2.5-VL compatibility with new model class and vision processing utilities.
 """
 import os
 
@@ -10,7 +9,8 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from torch.optim import AdamW
 
-from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
+from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
+from qwen_vl_utils import process_vision_info
 
 from datasets import load_dataset
 
@@ -155,15 +155,15 @@ def ensure_pil_image(image, min_size=256):
 
 def collate_fn(batch, processor, device):
     """
-    Collate function for processing batches of data for the Qwen2-VL model.
+    Collate function for processing batches of data for the Qwen2.5-VL model.
 
     This function prepares the input data for training or inference by processing
-    the messages, applying chat templates, ensuring images are in the correct format,
+    the messages, applying chat templates, using the new vision processing utilities,
     and creating input tensors for the model.
 
     Args:
         batch (List[Dict]): A list of dictionaries, each containing 'messages' with text and image data.
-        processor (AutoProcessor): The processor for the Qwen2-VL model, used for tokenization and image processing.
+        processor (AutoProcessor): The processor for the Qwen2.5-VL model, used for tokenization and image processing.
         device (torch.device): The device (CPU or GPU) to which the tensors should be moved.
 
     Returns:
@@ -172,19 +172,20 @@ def collate_fn(batch, processor, device):
             - labels_ids: A tensor of label IDs for training, with -100 for non-assistant tokens.
 
     Note:
-        This function assumes that each message in the batch contains both text and image data,
-        and that the first content item in each message is an image.
+        This function uses the new qwen_vl_utils.process_vision_info for proper image/video processing
+        in Qwen 2.5-VL format.
     """
     messages = [item['messages'] for item in batch]
     texts = [processor.apply_chat_template(msg, tokenize=False, add_generation_prompt=False) for msg in messages]
     
-    # Ensure all images are PIL Image objects
-    images = [ensure_pil_image(msg[0]['content'][0]['image']) for msg in messages]
+    # Use the new vision processing utility to extract image and video inputs
+    image_inputs, video_inputs = process_vision_info(messages)
     
-    # Process the text and images using the processor
+    # Process the text, images, and videos using the processor
     inputs = processor(
         text=texts,
-        images=images,
+        images=image_inputs,
+        videos=video_inputs,
         padding=True,
         return_tensors="pt",
     )
@@ -250,20 +251,19 @@ def train_and_validate(
     max_pixel=384,
     image_factor=28,
     num_accumulation_steps=2,
-    eval_steps=10,
-    max_steps=100,
+    eval_steps=10000,
+    max_steps=100000,
     train_select_start=0,
-    train_select_end= 1000,
+    train_select_end=1000,
     val_select_start=0,
-    val_select_end= 1000,
-    train_batch_size=4,
+    val_select_end=1000,
+    train_batch_size=1,
     val_batch_size=1,
     train_field="train",
-    val_field="validation",
-    lr=1e-5
+    val_field="validation"
 ):
     """
-    Train and validate a Qwen2VL model on a specified dataset.
+    Train and validate a Qwen2.5-VL model on a specified dataset.
 
     Args:
         model_name (str): Name of the pre-trained model to use.
@@ -277,13 +277,8 @@ def train_and_validate(
         max_pixel (int): Maximum pixel size for image processing.
         image_factor (int): Factor for image size calculation.
         num_accumulation_steps (int): Number of steps for gradient accumulation.
-
-        New: dont evaluate and save the model at regular intervals, just save the final model
         eval_steps (int): Number of steps between evaluations.
         max_steps (int): Maximum number of training steps.
-
-        New: Only define the end point of the train set as argument, always use 0 as start 
-        and whole validation set
         train_select_start (int): Starting index for selecting training data.
         train_select_end (int): Ending index for selecting training data.
         val_select_start (int): Starting index for selecting validation data.
@@ -292,24 +287,18 @@ def train_and_validate(
         val_batch_size (int): Batch size for validation.
         train_field (str): Field name for training data in the dataset.
         val_field (str): Field name for validation data in the dataset.
-        new: lr (float): Learning rate for the optimizer.
+
     Returns:
         None
     """
-    model = Qwen2VLForConditionalGeneration.from_pretrained(
+    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
         model_name, torch_dtype=torch.bfloat16,
         device_map=device
     )
-
     processor = AutoProcessor.from_pretrained(model_name, min_pixels=min_pixel*image_factor*image_factor, max_pixels=max_pixel*image_factor*image_factor, padding_side="right")
 
     # Load and split the dataset
     dataset = load_dataset(dataset_name)
-    # define end of train and validation sets as maximum available
-    train_select_start = 0
-    train_select_end = train_select_end #len(dataset[train_field])
-    val_select_start = 0
-    val_select_end = len(dataset[val_field])
     train_dataset = dataset[train_field].shuffle(seed=42).select(range(train_select_start, train_select_end))
     val_dataset = dataset[val_field].shuffle(seed=42).select(range(val_select_start, val_select_end))
 
@@ -330,7 +319,7 @@ def train_and_validate(
     )
 
     model.train()
-    optimizer = AdamW(model.parameters(), lr=lr) #1e-5
+    optimizer = AdamW(model.parameters(), lr=1e-5)
 
     global_step = 0
 
@@ -353,7 +342,6 @@ def train_and_validate(
             progress_bar.set_postfix({"loss": loss.item() * num_accumulation_steps})
 
             # Perform evaluation and save model every EVAL_STEPS
-            
             if global_step % eval_steps == 0 or global_step == max_steps:
                 avg_val_loss = validate(model, val_loader)
 
