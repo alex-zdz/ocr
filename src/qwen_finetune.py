@@ -4,7 +4,6 @@ I modified this to align it to work specifically with HuggingFace datasets.
 I also designed it to specifically with with the Gradio app in the main directory, app.py.
  I also added a validation step to the training loop. I am deeply indebted and grateful for their work. Without this code, this project would have been substantially more difficult.
 """
-import os
 
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -12,15 +11,14 @@ from torch.optim import AdamW
 
 from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
 
-from datasets import load_dataset
-
 from PIL import Image
 import base64
 from io import BytesIO
 
 from functools import partial
 from tqdm import tqdm
-
+from datasets import load_dataset, load_from_disk
+import pandas as pd
 
 def find_assistant_content_sublist_indexes(l):
     """
@@ -241,6 +239,7 @@ def validate(model, val_loader):
 def train_and_validate(
     model_name,
     output_dir,
+    dataset_location,
     dataset_name,
     image_column,
     text_column,
@@ -253,9 +252,9 @@ def train_and_validate(
     eval_steps=10,
     max_steps=100,
     train_select_start=0,
-    train_select_end= 1000,
+    #train_select_end= 1000,
     val_select_start=0,
-    val_select_end= 1000,
+    #val_select_end= 1000,
     train_batch_size=4,
     val_batch_size=1,
     train_field="train",
@@ -304,14 +303,15 @@ def train_and_validate(
     processor = AutoProcessor.from_pretrained(model_name, min_pixels=min_pixel*image_factor*image_factor, max_pixels=max_pixel*image_factor*image_factor, padding_side="right")
 
     # Load and split the dataset
-    dataset = load_dataset(dataset_name)
-    # define end of train and validation sets as maximum available
-    train_select_start = 0
-    train_select_end = train_select_end #len(dataset[train_field])
-    val_select_start = 0
-    val_select_end = len(dataset[val_field])
-    train_dataset = dataset[train_field].shuffle(seed=42).select(range(train_select_start, train_select_end))
-    val_dataset = dataset[val_field].shuffle(seed=42).select(range(val_select_start, val_select_end))
+    if(dataset_location == "HuggingFace"):
+        dataset = load_dataset(dataset_name)
+    else:
+        path = f"{dataset_location}/{dataset_name}"
+        dataset = load_from_disk(path)
+        
+    train_test_split = dataset.train_test_split(test_size=0.2, seed=42)
+    train_dataset = train_test_split['train']
+    val_dataset = train_test_split['test']
 
     train_dataset = HuggingFaceDataset(train_dataset, image_column, text_column, user_text)
     val_dataset = HuggingFaceDataset(val_dataset, image_column, text_column, user_text)
@@ -331,11 +331,11 @@ def train_and_validate(
 
     model.train()
     optimizer = AdamW(model.parameters(), lr=lr) #1e-5
-
+    validation_losses = []
     global_step = 0
 
     progress_bar = tqdm(total=max_steps, desc="Training")
-
+    #alex
     while global_step < max_steps:
         for batch in train_loader:
             global_step += 1
@@ -344,37 +344,28 @@ def train_and_validate(
             
             loss = outputs.loss / num_accumulation_steps
             loss.backward()
-            
+            progress_bar.update(1)
             if global_step % num_accumulation_steps == 0:
                 optimizer.step()
                 optimizer.zero_grad()
 
-            progress_bar.update(1)
             progress_bar.set_postfix({"loss": loss.item() * num_accumulation_steps})
 
             # Perform evaluation and save model every EVAL_STEPS
             
             if global_step % eval_steps == 0 or global_step == max_steps:
-                avg_val_loss = validate(model, val_loader)
-
-                # Save the model and processor
-                save_dir = os.path.join(output_dir, f"model_step_{global_step}")
-                os.makedirs(save_dir, exist_ok=True)
-                model.save_pretrained(save_dir)
-                processor.save_pretrained(save_dir)
-
+                # log the validation loss
+                validation_losses.append(validate(model, val_loader)) 
+                print(f"Validation loss: {validation_losses[-1]} at global step {global_step}")
                 model.train()  # Set the model back to training mode
 
+            # Save the model and processor
             if global_step >= max_steps:
-                save_dir = os.path.join(output_dir, f"final")
-                model.save_pretrained(save_dir)
-                processor.save_pretrained(save_dir)
+                model.save_pretrained(output_dir)
+                processor.save_pretrained(output_dir)
                 break
 
-        if global_step >= max_steps:
-            save_dir = os.path.join(output_dir, f"final")
-            model.save_pretrained(save_dir)
-            processor.save_pretrained(save_dir)
-            break
+    # Save the losses
+    pd.DataFrame(validation_losses).to_csv(f'{output_dir}/validation_losses.csv', index=False)    
 
     progress_bar.close()

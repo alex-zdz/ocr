@@ -5,5 +5,22 @@
 !/data/tokens/
 !/data/tokens/**
 
+# Results and checkpoints
+results/
+src/results/
+*.pt
+*.pth
+*.ckpt
+
+# WandB logs
+src/wandb/
+scripts/wandb/
+
+# Ignore Python cache
+__pycache__/
+*.pyc
+
 # Re-include .gitkeep files so empty folders are tracked
 !**/.gitkeep 
+
+
